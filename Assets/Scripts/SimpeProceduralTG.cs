@@ -3,6 +3,8 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor;
+using System.Threading.Tasks;
+using UnityEngine.Rendering;
 
 [RequireComponent(typeof(Terrain))]
 public class SimpeProceduralTG : MonoBehaviour
@@ -26,7 +28,7 @@ public class SimpeProceduralTG : MonoBehaviour
     [SerializeField] private float correctionHighmapLerp = 0.8f;
 
     private Terrain terrain;
-    private float minMaxHeight = 0;
+    private float _minMaxHeight = 0;
     private float[] minMaxAlphamapsHeights;
     private Vector3Int terrainSize;
 
@@ -34,20 +36,13 @@ public class SimpeProceduralTG : MonoBehaviour
         terrain = GetComponent<Terrain>();
 
         SetNoiseSeed();
-        print(minMaxHeight);
 
         terrainSize = Vector3Int.FloorToInt(new (terrain.terrainData.heightmapResolution, 0, terrain.terrainData.heightmapResolution));
         float scale = terrain.terrainData.size.x / 1000;
 
         print(terrain.terrainData.alphamapLayers);
-
-        if (Noises.Length != 0) {
-            if (useCorrectionHeightmap) {
-                terrain.terrainData.SetHeights(0, 0, GenerateHeights(Noises, new(terrainSize.x, terrainSize.z), scale, correctionHighmap, correctionHighmapStrength, correctionHighmapLerp));   
-            } else {
-                terrain.terrainData.SetHeights(0, 0, GenerateHeights(Noises, new(terrainSize.x, terrainSize.z), scale));
-            }            
-        }
+        
+        StartCoroutine(SetTerrain(new(terrainSize.x, terrainSize.z), scale));
 
         if (TextureNoises.Length != 0) {
             if (useLastTerrainColorToHeightmap) { 
@@ -78,7 +73,7 @@ public class SimpeProceduralTG : MonoBehaviour
         }
     }
 
-
+    //==================================== METHODS =================================
 
     private void SetNoiseSeed() {
         int globalSeed = UnityEngine.Random.Range(0, 100000000);
@@ -98,7 +93,7 @@ public class SimpeProceduralTG : MonoBehaviour
                 item.noise.SetSeed(globalSeed);
             }
 
-            if (!item.rangeUsage) minMaxHeight += item.amplitude;
+            if (!item.rangeUsage) _minMaxHeight += item.amplitude;
         }
 
         minMaxAlphamapsHeights = new float[terrain.terrainData.alphamapLayers];
@@ -147,9 +142,11 @@ public class SimpeProceduralTG : MonoBehaviour
         }
     }
 
-    private float[,] GenerateHeights(NoiseSet[] Noises, Vector2Int terrainSize, float scale, Texture2D correctionHighmap = null, float correctionHighmapStrength = 0f, float correctionHighmapLerp = 1f) {
-        float[,] heights = new float[terrainSize.x, terrainSize.y];
+    //==================================== GENERATE METHODS =================================
 
+    private float[,] GenerateHeights(NoiseSet[] Noises, Vector2Int terrainSize, float scale, Color[] correctionHighmap = null, Vector2Int correctionHighmapSize = new(), float correctionHighmapStrength = 0f, float correctionHighmapLerp = 1f, float minMaxHeight = 0f) {
+        float[,] heights = new float[terrainSize.x, terrainSize.y];
+        
         for (int x=0; x<terrainSize.x; x++)
         {
             for (int y=0; y<terrainSize.y; y++)
@@ -182,7 +179,9 @@ public class SimpeProceduralTG : MonoBehaviour
                 }
 
                 if (correctionHighmap != null) {
-                    float color = correctionHighmap.GetPixel(Mathf.FloorToInt(x/(float)terrainSize.x*correctionHighmap.width), Mathf.FloorToInt(y/(float)terrainSize.y*correctionHighmap.height)).grayscale;
+                    int   x_pixel = Mathf.FloorToInt(x/(float)terrainSize.x*correctionHighmapSize.x),
+                          y_pixel = Mathf.FloorToInt(y/(float)terrainSize.y*correctionHighmapSize.y);
+                    float color = correctionHighmap[correctionHighmapSize.x*y_pixel+x_pixel].grayscale;
 
                     if (color != 0) height += color*correctionHighmapStrength;
                 }
@@ -287,6 +286,45 @@ public class SimpeProceduralTG : MonoBehaviour
 
         return details;
     }
+
+    //==================================== MULTITHREAD METHODS =================================
+
+    IEnumerator SetTerrain(Vector2Int terrainSize, float scale) {
+        print("Setting terrain...");
+
+        float[,] generatedHeights = new float[0,0];
+        Task<float[,]> generateTerrain;
+
+        if (Noises.Length != 0) {
+            if (useCorrectionHeightmap) {
+                Color[] pixels = correctionHighmap.GetPixels();
+                Vector2Int size = new(correctionHighmap.width, correctionHighmap.height);
+
+                generateTerrain = new Task<float[,]>(() => 
+                    GenerateHeights(Noises, terrainSize, scale, 
+                                    pixels, size, correctionHighmapStrength, correctionHighmapLerp, minMaxHeight: _minMaxHeight));   
+            } else {
+                generateTerrain = new Task<float[,]>(() => 
+                    GenerateHeights(Noises, terrainSize, scale, minMaxHeight: _minMaxHeight));
+            }            
+        } else {
+            print("End of setting terrain");
+            yield break;
+        }
+        generateTerrain.Start();
+
+        yield return new WaitUntil(() => generateTerrain.IsCompletedSuccessfully || generateTerrain.IsFaulted);
+        if (generateTerrain.IsFaulted) Debug.LogError("Terrain generation failed");
+
+        generatedHeights = generateTerrain.Result;
+
+        if (generatedHeights != null) terrain.terrainData.SetHeights(0, 0, generatedHeights);
+        else Debug.LogError("Heights array is null");
+
+        print("End of setting terrain");
+    }
+
+    //==================================== SPECIAL METHODS =================================
 
     float scaleBetween(float value, float outMin, float outMax, float inputMin, float inputMax) =>
         outMin + (outMax - outMin) * ((value - inputMin) / (inputMax - inputMin));
