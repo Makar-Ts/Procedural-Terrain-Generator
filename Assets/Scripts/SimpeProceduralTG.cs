@@ -31,8 +31,10 @@ public class SimpeProceduralTG : MonoBehaviour
     private float _minMaxHeight = 0;
     private float[] minMaxAlphamapsHeights;
     private Vector3Int terrainSize;
+    private float startTime;
 
     private void Start() {
+        startTime = Time.time;
         terrain = GetComponent<Terrain>();
 
         SetNoiseSeed();
@@ -43,6 +45,7 @@ public class SimpeProceduralTG : MonoBehaviour
         print(terrain.terrainData.alphamapLayers);
         
         StartCoroutine(SetTerrain(new(terrainSize.x, terrainSize.z), scale));
+        StartCoroutine(SetDetails(new(terrainSize.x, terrainSize.z), 4000));
 
         if (TextureNoises.Length != 0) {
             if (useLastTerrainColorToHeightmap) { 
@@ -60,17 +63,7 @@ public class SimpeProceduralTG : MonoBehaviour
             terrain.terrainData.treeInstances = trees;
         }
 
-        if (terrain.terrainData.detailPrototypes.Length != 0) {
-            int detailsTypeCount = terrain.terrainData.detailPrototypes.Length;
-            int[,] details;
-            
-            if (useCorrectionHeightmap) details = GenerateDetails(LawnNoise, new(Mathf.RoundToInt(terrain.terrainData.size.x), Mathf.RoundToInt(terrain.terrainData.size.z)), 4000, correctionHighmap);
-            else                        details = GenerateDetails(LawnNoise, new(Mathf.RoundToInt(terrain.terrainData.size.x), Mathf.RoundToInt(terrain.terrainData.size.z)), 4000);
-
-            for (int i = 0; i < detailsTypeCount; i++) {
-                terrain.terrainData.SetDetailLayer(0, 0, i, details);
-            }
-        }
+        print("Main thread ended. Time elapsed: " + (Time.time - startTime));
     }
 
     //==================================== METHODS =================================
@@ -263,7 +256,7 @@ public class SimpeProceduralTG : MonoBehaviour
         return trees.ToArray();
     }
 
-    private int[,] GenerateDetails(NoiseSet Noise, Vector2Int terrainSize, int detailDencity, Texture2D correctionHighmap = null) {
+    private int[,] GenerateDetails(NoiseSet Noise, Vector2Int terrainSize, int detailDencity, Color[] correctionHighmap = null, Vector2Int correctionHighmapSize = new()) {
         int[,] details = new int[terrainSize.x, terrainSize.y];
 
         for (int x=0; x<terrainSize.x; x++)
@@ -273,9 +266,9 @@ public class SimpeProceduralTG : MonoBehaviour
                 float correction = 1;
 
                 if (correctionHighmap != null) { 
-                    correction = correctionHighmap.GetPixel(
-                                                            Mathf.FloorToInt(x/(float)terrainSize.x*correctionHighmap.width-0.01f*correctionHighmap.width), 
-                                                            Mathf.FloorToInt(y/(float)terrainSize.y*correctionHighmap.height)).grayscale;
+                    int   x_pixel = Mathf.FloorToInt(x/(float)terrainSize.x*correctionHighmapSize.x),
+                          y_pixel = Mathf.FloorToInt(y/(float)terrainSize.y*correctionHighmapSize.y);
+                    correction = correctionHighmap[correctionHighmapSize.x*y_pixel+x_pixel].grayscale;
 
                     if (correction > 0) continue;
                 }
@@ -308,7 +301,7 @@ public class SimpeProceduralTG : MonoBehaviour
                     GenerateHeights(Noises, terrainSize, scale, minMaxHeight: _minMaxHeight));
             }            
         } else {
-            print("End of setting terrain");
+            print("End of setting terrain (no noises)");
             yield break;
         }
         generateTerrain.Start();
@@ -321,7 +314,42 @@ public class SimpeProceduralTG : MonoBehaviour
         if (generatedHeights != null) terrain.terrainData.SetHeights(0, 0, generatedHeights);
         else Debug.LogError("Heights array is null");
 
-        print("End of setting terrain");
+        print("End of setting terrain. Time elapsed: " + (Time.time - startTime));
+    }
+
+    IEnumerator SetDetails(Vector2Int terrainSize, int detailDencity) {
+        print("Setting details...");
+
+        int[,] details;
+        Task<int[,]> task;
+        int detailsTypeCount = terrain.terrainData.detailPrototypes.Length;
+
+        if (terrain.terrainData.detailPrototypes.Length != 0) {
+            Color[] pixels = correctionHighmap.GetPixels();
+            Vector2Int size = new(correctionHighmap.width, correctionHighmap.height);
+            
+            if (useCorrectionHeightmap) {
+                task = new Task<int[,]>(() => GenerateDetails(LawnNoise, terrainSize, detailDencity, pixels, size));
+            } else {
+                task = new Task<int[,]>(() => GenerateDetails(LawnNoise, terrainSize, detailDencity));
+            }
+        } else {
+            yield break;
+        }
+        task.Start();
+
+        yield return new WaitUntil(() => task.IsCompletedSuccessfully || task.IsFaulted);
+        if (task.IsFaulted) Debug.LogError("Details generation failed");
+
+        details = task.Result;
+
+        if (details != null) { 
+            for (int i = 0; i < detailsTypeCount; i++) {
+                terrain.terrainData.SetDetailLayer(0, 0, i, details);
+            }
+        } else Debug.LogError("Details array is null");
+
+        print("End of setting details. Time elapsed: " + (Time.time - startTime));
     }
 
     //==================================== SPECIAL METHODS =================================
