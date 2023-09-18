@@ -5,6 +5,7 @@ using UnityEngine;
 using UnityEditor;
 using System.Threading.Tasks;
 using UnityEngine.Rendering;
+using System.Linq.Expressions;
 
 [RequireComponent(typeof(Terrain))]
 public class SimpeProceduralTG : MonoBehaviour
@@ -31,10 +32,10 @@ public class SimpeProceduralTG : MonoBehaviour
     private float _minMaxHeight = 0;
     private float[] minMaxAlphamapsHeights;
     private Vector3Int terrainSize;
-    private float startTime;
+    private long startTime;
 
     private void Start() {
-        startTime = Time.time;
+        startTime = DateTime.Now.Ticks / TimeSpan.TicksPerMillisecond;
         terrain = GetComponent<Terrain>();
 
         SetNoiseSeed();
@@ -46,14 +47,7 @@ public class SimpeProceduralTG : MonoBehaviour
         
         StartCoroutine(SetTerrain(new(terrainSize.x, terrainSize.z), scale));
         StartCoroutine(SetDetails(new(terrainSize.x, terrainSize.z), 4000));
-
-        if (TextureNoises.Length != 0) {
-            if (useLastTerrainColorToHeightmap) { 
-                terrain.terrainData.SetAlphamaps(0, 0, GenerateAlphamaps(TextureNoises, Vector2Int.FloorToInt(new(terrain.terrainData.alphamapResolution, terrain.terrainData.alphamapResolution)), terrain.terrainData.alphamapLayers, correctionHighmap));
-            } else {
-                terrain.terrainData.SetAlphamaps(0, 0, GenerateAlphamaps(TextureNoises, Vector2Int.FloorToInt(new(terrain.terrainData.alphamapResolution, terrain.terrainData.alphamapResolution)), terrain.terrainData.alphamapLayers));
-            }
-        }
+        StartCoroutine(SetAlphamaps(Vector2Int.FloorToInt(new(terrain.terrainData.alphamapResolution, terrain.terrainData.alphamapResolution))));
 
         if (terrain.terrainData.treePrototypes.Length != 0) {
             TreeInstance[] trees;
@@ -63,7 +57,7 @@ public class SimpeProceduralTG : MonoBehaviour
             terrain.terrainData.treeInstances = trees;
         }
 
-        print("Main thread ended. Time elapsed: " + (Time.time - startTime));
+        print("Main thread ended. Time elapsed: " + (DateTime.Now.Ticks / TimeSpan.TicksPerMillisecond - startTime));
     }
 
     //==================================== METHODS =================================
@@ -186,7 +180,7 @@ public class SimpeProceduralTG : MonoBehaviour
         return heights;
     }
 
-    private float[,,] GenerateAlphamaps(TexturesNS[] Noises, Vector2Int terrainSize, int alphamapLayers, Texture2D correctionHighmap = null) {
+    private float[,,] GenerateAlphamaps(TexturesNS[] Noises, Vector2Int terrainSize, int alphamapLayers, Color[] correctionHighmap = null, Vector2Int correctionHighmapSize = new()) {
         float[,,] heights = new float[terrainSize.x, terrainSize.y, alphamapLayers];
 
         for (int x=0; x<terrainSize.x; x++)
@@ -194,8 +188,9 @@ public class SimpeProceduralTG : MonoBehaviour
             for (int y=0; y<terrainSize.y; y++)
             {
                 if (correctionHighmap != null) {
-                    float grayscale = correctionHighmap.GetPixel(Mathf.FloorToInt(x/(float)terrainSize.x*correctionHighmap.width), 
-                                                   Mathf.FloorToInt(y/(float)terrainSize.y*correctionHighmap.height)).grayscale;
+                    int   x_pixel = Mathf.FloorToInt(x/(float)terrainSize.x*correctionHighmapSize.x),
+                          y_pixel = Mathf.FloorToInt(y/(float)terrainSize.y*correctionHighmapSize.y);
+                    float grayscale = correctionHighmap[correctionHighmapSize.x*y_pixel+x_pixel].grayscale;
 
                     if (grayscale >= 0.99f) {
                         heights[x, y, alphamapLayers-1] = grayscale;
@@ -314,7 +309,7 @@ public class SimpeProceduralTG : MonoBehaviour
         if (generatedHeights != null) terrain.terrainData.SetHeights(0, 0, generatedHeights);
         else Debug.LogError("Heights array is null");
 
-        print("End of setting terrain. Time elapsed: " + (Time.time - startTime));
+        print("End of setting terrain. Time elapsed: " + (DateTime.Now.Ticks / TimeSpan.TicksPerMillisecond - startTime));
     }
 
     IEnumerator SetDetails(Vector2Int terrainSize, int detailDencity) {
@@ -349,7 +344,42 @@ public class SimpeProceduralTG : MonoBehaviour
             }
         } else Debug.LogError("Details array is null");
 
-        print("End of setting details. Time elapsed: " + (Time.time - startTime));
+        print("End of setting details. Time elapsed: " + (DateTime.Now.Ticks / TimeSpan.TicksPerMillisecond - startTime));
+    }
+
+    IEnumerator SetAlphamaps(Vector2Int terrainSize) {
+        print("Setting alphamaps...");
+
+        float[,,] alpamaps;
+        Task<float[,,]> task;
+
+        if (TextureNoises.Length != 0) {
+            int alphamapLayers = terrain.terrainData.alphamapLayers;
+            Color[] pixels = correctionHighmap.GetPixels();
+            Vector2Int size = new(correctionHighmap.width, correctionHighmap.height);
+
+            if (useLastTerrainColorToHeightmap) { 
+                task = new(() => GenerateAlphamaps(TextureNoises, terrainSize, 
+                                                   alphamapLayers, pixels, size));
+            } else {
+                task = new(() => GenerateAlphamaps(TextureNoises, terrainSize, 
+                                                   alphamapLayers));
+            }
+        } else {
+            yield break;
+        }
+        task.Start();
+
+        yield return new WaitUntil(() => task.IsCompletedSuccessfully || task.IsFaulted);
+        if (task.IsFaulted) Debug.LogError("Alphamaps generation failed");
+
+        alpamaps = task.Result;
+
+        if (alpamaps != null) {
+            terrain.terrainData.SetAlphamaps(0, 0, alpamaps);
+        } else Debug.LogError("Alphamaps array is null");
+
+        print("End of setting alphamaps. Time elapsed: " + (DateTime.Now.Ticks / TimeSpan.TicksPerMillisecond - startTime));
     }
 
     //==================================== SPECIAL METHODS =================================
