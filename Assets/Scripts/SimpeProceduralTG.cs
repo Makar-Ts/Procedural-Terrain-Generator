@@ -21,11 +21,15 @@ public class SimpeProceduralTG : MonoBehaviour
     [SerializeField] private Vector2 treesSizeRange = new(1, 2.5f);
     [SerializeField] private NoiseSet TreeNoise, LawnNoise;
     //[SerializeField] private TreeNoiseSet[] treeNoises;
-    [Header("Other")]
+    [Header("Correction Highmap")]
     [SerializeField] private bool useCorrectionHeightmap = false;
     [SerializeField] private bool useLastTerrainColorToHeightmap = false;
     [SerializeField] private Texture2D correctionHighmap;
     [SerializeField] private float correctionHighmapStrength = 0.1f;
+    [SerializeField] private bool useAbsoluteCorrectionHighmapPos = false;
+    [Tooltip("От 0 до 1. Берется относительно максимальной высоты")]
+    [SerializeField] private float correctionHighmapPos = 0.5f;
+    [Tooltip("Порог после которого берется значение высоты correctionHighmapPos")]
     [SerializeField] private float correctionHighmapLerp = 0.8f;
 
     private Terrain terrain;
@@ -170,7 +174,9 @@ public class SimpeProceduralTG : MonoBehaviour
                           y_pixel = Mathf.FloorToInt(y/(float)terrainSize.y*correctionHighmapSize.y);
                     float color = correctionHighmap[correctionHighmapSize.x*y_pixel+x_pixel].grayscale;
 
-                    if (color != 0) height += color*correctionHighmapStrength;
+                    if (useAbsoluteCorrectionHighmapPos) {
+                        height = Mathf.Lerp(height, (minMaxHeight*correctionHighmapPos)+(color*correctionHighmapStrength), color); //(color < correctionHighmapLerp ? 0 : color)
+                    } else height += color*correctionHighmapStrength;
                 }
 
                 heights[x, y] = scaleBetween(height, 0, 1, -minMaxHeight, minMaxHeight);
